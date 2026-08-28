@@ -107,13 +107,14 @@ function fb(paramRx, uniteRx) {
 function extraireParUnite(texte, paramRegex, uniteRegex, fallbackRegex, formatB_regex) {
     const numSimple = nombreRegex();
     const numAvecFlag = "(?:[HLBA]\\s*)?([<>]?(?:=)?\\d+(?:[.,]\\d+)?)";
+    const param = "(?:" + paramRegex + ")";
     const regexValeurPuisReference = new RegExp(
-        paramRegex + "\\s+" + numAvecFlag + "\\s+(?:<=|>=)?\\s*\\d+(?:[.,]\\d+)?\\s*-\\s*\\d+(?:[.,]\\d+)?\\s+" + uniteRegex,
+        param + "\\s+" + numAvecFlag + "\\s+(?:<=|>=)?\\s*\\d+(?:[.,]\\d+)?\\s*-\\s*\\d+(?:[.,]\\d+)?\\s+" + uniteRegex,
         "i"
     );
 
     const regexA = new RegExp(
-        paramRegex + "\\s+" + uniteRegex + "[^\\n]*?AUTO[VHBCAX\\/]*\\s*" + numSimple,
+        param + "\\s+" + uniteRegex + "[^\\n]*?AUTO[VHBCAX\\/]*\\s*" + numSimple,
         "i"
     );
     const mA = texte.match(regexA);
@@ -121,31 +122,31 @@ function extraireParUnite(texte, paramRegex, uniteRegex, fallbackRegex, formatB_
 
     if (formatB_regex) {
         const mB = texte.match(formatB_regex);
-        if (mB) return normaliserValeur(mB[1]);
+        if (mB && mB[1]) return normaliserValeur(mB[1]);
     }
 
     const mRef = texte.match(regexValeurPuisReference);
     if (mRef) return normaliserValeur(mRef[1]);
 
     const regexC = new RegExp(
-        paramRegex + "\\s+" + uniteRegex +
-        "\\s+[A-Z]{2,}\\d{3,}(?:AB|AH|AN|CB|CH|XB|XH)?\\s*" + numSimple,
+        param + "\\s+" + uniteRegex +
+        "\\s+[A-Z]{2,}\\d{2,}(?:AB|AH|AN|CB|CH|XB|XH)?\\s*" + numSimple,
         "i"
     );
     const mC = texte.match(regexC);
     if (mC) return normaliserValeur(mC[1]);
 
     const regexD = new RegExp(
-        paramRegex + "\\s+" + numAvecFlag + "\\s+" + uniteRegex,
+        param + "\\s+" + numAvecFlag + "\\s+" + uniteRegex,
         "i"
     );
     const mD = texte.match(regexD);
     if (mD) return normaliserValeur(mD[1]);
 
-    const regexE = new RegExp(
-        paramRegex + "[^\\n]{0,40}?\\s+" + numAvecFlag + "\\s+" + uniteRegex,
-        "i"
-    );
+ const regexE = new RegExp(
+    param + "[^\\n\\d]{0,40}?" + numAvecFlag + "[^\\n]*?\\s" + uniteRegex,
+    "i"
+);
     const mE = texte.match(regexE);
     if (mE) return normaliserValeur(mE[1]);
 
@@ -167,13 +168,20 @@ function extraireFormatCompactRef(texte, paramRegex, uniteRegex) {
     return m ? normaliserValeur(m[1]) : null;
 }
 
+/* CORRECTION : le segment "code labo" utilisait \d{3,}? (lazy), ce qui pouvait
+   laisser un ou plusieurs chiffres du code déborder dans le groupe de capture
+   de la valeur (ex. "CAT032414,6" -> capturait "414,6" au lieu de "14,6" pour le
+   DVE). Les codes labo observés dans ce format sont systématiquement composés
+   de lettres suivies d'EXACTEMENT 4 chiffres (ex. CAT0324), optionnellement
+   suivis d'un drapeau (AH, CB, etc.). Fixer la longueur à \d{4} élimine
+   l'ambiguïté entre la fin du code et le début de la valeur. */
 function extraireFormatRefCodeValeur(texte, paramRegex, uniteRegex) {
     const rx = new RegExp(
         "(?:^|\\n)\\s*(?:[<>]=?\\s*)?\\d+[.,]?\\d*(?:\\s*-\\s*(?:[<>]=?\\s*)?\\d+[.,]?\\d*)?\\s*(?:" +
         paramRegex +
         ")\\s+(?:" +
         uniteRegex +
-        ")\\s+[A-Z]{2,}\\d{3,}?(?:AB|AH|AN|CB|CH|XB|XH)?(" +
+        ")\\s+[A-Z]{2,}\\d{4}(?:AB|AH|AN|CB|CH|XB|XH)?(" +
         "[<>]?(?:=)?\\d+(?:[.,]\\d+)?" +
         ")\\s+20\\d{2}\\/",
         "i"
@@ -202,7 +210,29 @@ function extraireFormatCisssInverse(texte, paramRegex, uniteRegex = null) {
     return null;
 }
 
+/* NOUVEAU : format "Nom U/L CODEXXah<valeur> AAAA/" avec un préfixe de type ">60" isolé
+   juste avant la ligne du paramètre (ex: DFGe IUCPQ). On matche directement
+   code-labo + valeur + date, sans dépendre de ce qui précède. */
+function extraireFormatCodeValeurDate(texte, paramRegex, uniteRegex) {
+    const rx = new RegExp(
+        "(?:" + paramRegex + ")\\s+(?:" + uniteRegex + ")\\s+[A-Z]{2,}\\d{2,}(?:AB|AH|AN|CB|CH|XB|XH)?([<>]?(?:=)?\\d+(?:[.,]\\d+)?)\\s+20\\d{2}\\/",
+        "i"
+    );
+    const m = texte.match(rx);
+    return m ? normaliserValeur(m[1]) : null;
+}
+
 function extraireDFGe(texte) {
+    // AUTOV/AUTOH… avec valeur collée (ex: AUTOV112) — doit être testé avant les patterns
+    // qui consomment des chiffres du code labo (compactCourt).
+    let mAuto = texte.match(/DFG\s*Estim[ée]\/1,73m2\s*\(pr[ée]dite\)\s*mL\/min\s+AUTO[VHBCAX\/]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i);
+    if (mAuto) return normaliserValeur(mAuto[1]);
+
+    // NOUVEAU : format compact avec code labo à 2 lettres seulement (ex: CHTES01AB) devant la valeur,
+    // suivi de la date - couvre les codes labo plus courts (2 lettres + chiffres) que compactCode4/compact
+    let compactCourt = texte.match(/DFG\s*Estim[ée]\/1,73m2\s*\(pr[ée]dite\)\s*mL\/min\s+[A-Z]{2,}\d{2,}(?:AB|AH|AN|CB|CH|XB|XH)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+20\d{2}\//i);
+    if (compactCourt) return normaliserValeur(compactCourt[1]);
+
     let sansCodeAvantUnite = texte.match(/DFG\s*Estim[ée]\/1,73m2\s*\(pr[ée]dite\)\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)\s*mL\/min/i);
     if (sansCodeAvantUnite) return normaliserValeur(sansCodeAvantUnite[1]);
 
@@ -230,9 +260,9 @@ function extraireDFGe(texte) {
 function extraireHb(texte) {
     const patterns = [
         /(?:^|\n)\s*(?:[<>]=?\s*)?\d+(?:[.,]\d+)?\s*-\s*(?:[<>]=?\s*)?\d+(?:[.,]\d+)?Hb\s+g\/L\s+[A-Z]{2,}\d{3,4}(?:AB|AH|AN|CB|CH|XB|XH)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+20\d{2}\//i,
-        /\bHb\b\s*(?:[HLB]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s*g\/L\b/i,
+        /(?<!moyenne )\bHb\b\s*(?:[HLB]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s*g\/L\b/i,
         /H[ée]moglobine\s*(?:[HLB]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s*g\/L\b/i,
-        /\bHb\b[^\n]*?AUTO[VHBCAX]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i,
+        /(?<!moyenne )\bHb\b[^\n]*?AUTO[VHBCAX]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i,
         /H[ée]moglobine[^\n]*?AUTO[VHBCAX]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i
     ];
 
@@ -250,6 +280,9 @@ function extraireHb(texte) {
         if (match && match[1]) return normaliserValeur(match[1]);
 
         match = propre.match(/^([<>]?(?:=)?\d+(?:[.,]\d+)?)\s*g\/L\b[\s\S]*?(?:Hb|H[ée]moglobine)\b/i);
+        if (match && match[1]) return normaliserValeur(match[1]);
+
+        match = propre.match(/^[A-Z]?\s*g\/L\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)[\s\S]*?(?:Hb|H[ée]moglobine)\b/i);
         if (match && match[1]) return normaliserValeur(match[1]);
     }
 
@@ -381,7 +414,7 @@ function extraireCT(texte) {
 }
 
 function extraireApoB(texte) {
-    let m = texte.match(/(?:Apolipoprot[ée]ine\s*B-?100|Apo\s*B)[^\n]*?AUTO[VHBCAX]*\s*([\d,.]+)/i);
+    let m = texte.match(/Apolipoprot[ée]ine\s+B\s+g\/L\s+AUTO[VHBCAX\/]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i);
     if (m) return normaliserValeur(m[1]);
 
     m = texte.match(/(?:Apolipoprot[ée]ines?\s*B|Apo\s*B)\s*(?:[HBA]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+(?:<=|>=)?\s*[\d,. -]+\s*g\/L\b/i);
@@ -399,7 +432,29 @@ function extraireApoB(texte) {
     return null;
 }
 
+function extraireLpA(texte) {
+    let m = texte.match(/Lipoprot[ée]ines?\s*a\s*\(Lpa\)\s*nmol\/L\s+AUTO[VHBCAX\/]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i);
+    if (m) return normaliserValeur(m[1]);
+
+    m = texte.match(/Lipoprot[ée]ines?\s*a\s*\(Lpa\)\s*nmol\/L\s+[A-Z]{2,}\d{2,}(?:AB|AH|AN|CB|CH|XB|XH)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+20\d{2}\//i);
+    if (m) return normaliserValeur(m[1]);
+
+    m = texte.match(/(?:Lipoprot[ée]ines?\s*a\s*\(Lpa\)|Lp\s*\(a\))\s*(?:[HBA]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+(?:<=|>=)?\s*[\d,. -]+\s*nmol\/L\b/i);
+    if (m) return normaliserValeur(m[1]);
+
+    m = texte.match(/(?:Lipoprot[ée]ines?\s*a\s*\(Lpa\)|Lp\s*\(a\))\s*(?:[HBA]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s*nmol\/L\b/i);
+    if (m) return normaliserValeur(m[1]);
+
+    return extraireFormatCisssInverse(texte, "Lipoprot[ée]ines?\\s*a\\s*\\(Lpa\\)|Lp\\s*\\(a\\)", "nmol\\/L");
+}
+
 function extraireA1c(texte) {
+    // Si le labo indique explicitement que l'HbA1c n'est pas mesurable, on laisse
+    // la fructosamine (si présente) fournir l'estimation via processRapport.
+    if (/HbA1c\s+non\s+mesurable|HbA1c[^\n]*non\s+mesurable/i.test(texte)) {
+        return null;
+    }
+
     let m = texte.match(/HBA1c\s*[HB]?\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i);
     if (!m) m = texte.match(/HbA1c\s+%[^\n]*?AUTO[VHBCAX]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i);
     if (!m) m = texte.match(/HbA1c\s+[^\n]*?AUTO[VHBCAX]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i);
@@ -436,12 +491,41 @@ function extraireA1c(texte) {
     return extractValue(valeurA1c, /^([<>]?(?:=)?\d+(?:[.,]\d+)?)$/, { percentIfFraction: true });
 }
 
+/* Fructosamine (umol/L). Format typique: "Fructosamine umol/L AUTOVAH435 2026/..." */
+function extraireFructosamine(texte) {
+    let m = texte.match(/Fructosamine\s+[uµμ]?mol\/L\s+AUTO[VHBCAX\/]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i);
+    if (m) return normaliserValeur(m[1]);
+
+    m = texte.match(/Fructosamine\s+[uµμ]?mol\/L\s+[A-Z]{2,}\d{2,}(?:AB|AH|AN|CB|CH|XB|XH)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+20\d{2}\//i);
+    if (m) return normaliserValeur(m[1]);
+
+    m = texte.match(/Fructosamine\s+(?:[HLBA]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+[uµμ]?mol\/L/i);
+    if (m) return normaliserValeur(m[1]);
+
+    return extraireParUnite(texte, "Fructosamine", "[uµμ]?mol\\/L", /Fructosamine[^\d-]*([\d,.]+)/i);
+}
+
+/* Conversion Fructosamine (umol/L) → HbA1c (%) : HbA1c = 0.017 × fructosamine + 1.61 */
+function fructosamineVersHbA1c(val) {
+    if (val === null || val === undefined) return null;
+    const n = parseFloat(String(val).replace(",", "."));
+    if (Number.isNaN(n)) return null;
+    const a1c = 0.017 * n + 1.61;
+    return `${a1c.toFixed(1)}%`;
+}
+
 function extraireProlactine(texte) {
     return extraireFormatCisssInverse(texte, "Prolactine", "[uµμ]g\\/L") ||
         extractValue(texte, /Prolactine\s+(?:[HLBA]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+(?:(?:<=|>=)?\s*[\d,. -]+\s+)?[uµμ]g\/L/i);
 }
 
+/* AJOUT : format "Testostérone nmol/L AUTOVAH52,2 2026/..." (valeur collée
+   directement après AUTOV + drapeau, sans espace) rencontré dans ce rapport,
+   en plus du format CISSS inversé déjà géré et du format valeur-avant-unité. */
 function extraireTestosterone(texte) {
+    let m = texte.match(/Testost[ée]rone\s+nmol\/L\s+AUTO[VHBCAX\/]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i);
+    if (m) return normaliserValeur(m[1]);
+
     return extraireFormatCisssInverse(texte, "TESTOSTERONE\\s+TOTALE|Testost[ée]rone", "nmol\\/L") ||
         extractValue(texte, /Testost[ée]rone(?:\s+totale)?\s+(?:[HLBA]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+(?:(?:<=|>=)?\s*[\d,. -]+\s+)?nmol\/L/i);
 }
@@ -449,6 +533,24 @@ function extraireTestosterone(texte) {
 function extraireDHEA(texte) {
     return extraireFormatCisssInverse(texte, "DHEA-?S", "[uµμ]mol\\/L") ||
         extractValue(texte, /DHEA-?S\s+(?:[HLBA]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+(?:(?:<=|>=)?\s*[\d,. -]+\s+)?[uµμ]mol\/L/i);
+}
+
+/* NOUVEAU : Estradiol (pmol/L), format "Estradiol pmol/L AUTOV294 2026/...". */
+function extraireEstradiol(texte) {
+    let m = texte.match(/Estradiol\s+pmol\/L\s+AUTO[VHBCAX\/]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i);
+    if (m) return normaliserValeur(m[1]);
+
+    return extraireFormatCisssInverse(texte, "Estradiol", "pmol\\/L") ||
+        extractValue(texte, /Estradiol\s+(?:[HLBA]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+(?:(?:<=|>=)?\s*[\d,. -]+\s+)?pmol\/L/i);
+}
+
+/* NOUVEAU : SHBG (nmol/L), format "SHBG nmol/L AUTOV104 2026/...". */
+function extraireSHBG(texte) {
+    let m = texte.match(/SHBG\s+nmol\/L\s+AUTO[VHBCAX\/]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i);
+    if (m) return normaliserValeur(m[1]);
+
+    return extraireFormatCisssInverse(texte, "SHBG", "nmol\\/L") ||
+        extractValue(texte, /SHBG\s+(?:[HLBA]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+(?:(?:<=|>=)?\s*[\d,. -]+\s+)?nmol\/L/i);
 }
 
 function extractRacValue(text) {
@@ -481,26 +583,72 @@ function extractRacValue(text) {
 }
 
 function extraireRAC(texte) {
-    if (/Impossibilit[ée] d'effectuer le calcul/i.test(texte) && /Microalbumine\/Cr[ée]at|Microalbumine\/Cr[ée]at; Ur|Microalbumine\/Créat/i.test(texte)) {
+    if (/Impossibilit[ée] d'effectuer le calcul/i.test(texte) &&
+        /Microalbumine\/Cr[ée]at|Microalbumine\/Cr[ée]at; Ur|Microalbumine\/Créat/i.test(texte)) {
         return "négatif";
     }
 
-    let m = texte.match(/Microalbumine\/Cr[ée]at\s*;\s*Ur[\s\S]{0,120}?creat[\s\S]{0,40}?(?:AUTO[VHBCAX\/]*\s*)?(?:AH|AB|AN|CB|CH|XB|XH)?\s*([<>]?\d+(?:[.,]\d+)?)/i);
-    if (m) return normaliserValeur(m[1]);
+    // Fonction locale : les RAC <2,0 mg/mmol sont rapportés simplement comme "-"
+    const normaliserRAC = (valeur) => {
+        if (!valeur) return null;
 
-    m = texte.match(/Microalbumine\s*\/\s*Cr[ée]at[^\n]*?AUTO[VHBCAX]*\s*([\d,.]+)/i);
-    if (m) return normaliserValeur(m[1]);
+        const v = String(valeur)
+            .replace(/\s/g, "")
+            .replace(",", ".");
 
-    m = texte.match(/Microalbumine\s*\/\s*Cr[ée]at[\s\S]*?AUTO[VHBCAX]*\s*([\d,.]+)/i);
-    if (m) return normaliserValeur(m[1]);
+        // Toute valeur explicitement <2,0 est considérée comme négative
+        if (/^<\s*2(?:\.0+)?$/i.test(v)) {
+            return "-";
+        }
 
-    m = texte.match(/Microalbumine\s*\(miction\).*?([\d,.]+)\s*mg\/mmolCRE/is);
-    if (m) return normaliserValeur(m[1]);
+        // Si le laboratoire rapporte <2,xx, conserver "-" pour le seuil analytique
+        // du RAC dans ce format de rapport.
+        if (/^<\s*2\./i.test(v)) {
+            return "-";
+        }
 
-    m = texte.match(/Microalbumine\s*\/?\s*Cr[ée]at\s*;?\s*Ur[\s\S]{0,120}?([\d,.]+)\s*(?:AH|AB|AN|CB|CH|XB|XH)?\s*(?:mg\/mmol|AUTOV|20\d{2}\/\d{2}\/\d{2})/i);
-    if (m) return normaliserValeur(m[1]);
+        return normaliserValeur(v);
+    };
 
-    return extractRacValue(texte);
+    let m = texte.match(
+        /Microalbumine\/Cr[ée]at\s*;\s*Ur[\s\S]{0,120}?creat[\s\S]{0,40}?(?:AUTO[VHBCAX\/]*\s*)?(?:AH|AB|AN|CB|CH|XB|XH)?\s*(<\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)/i
+    );
+    if (m) return normaliserRAC(m[1]);
+
+    m = texte.match(
+        /Microalbumine\s*\/\s*Cr[ée]at[^\n]*?AUTO[VHBCAX]*\s*(<\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)/i
+    );
+    if (m) return normaliserRAC(m[1]);
+
+    m = texte.match(
+        /Microalbumine\s*\/\s*Cr[ée]at[\s\S]*?AUTO[VHBCAX]*\s*(<\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)/i
+    );
+    if (m) return normaliserRAC(m[1]);
+
+    // Format Pharmacie André Villeneuve / rapport consolidé :
+    // "Microalbumine (miction) <2,00 mg/mmolCRE"
+    m = texte.match(
+        /Microalbumine\s*\(miction\)[\s\S]{0,80}?(<\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s*mg\/mmolCRE/i
+    );
+    if (m) return normaliserRAC(m[1]);
+
+    m = texte.match(
+        /Microalbumine\s*\/?\s*Cr[ée]at\s*;?\s*Ur[\s\S]{0,120}?(<\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s*(?:AH|AB|AN|CB|CH|XB|XH)?\s*(?:mg\/mmol|AUTOV|20\d{2}\/\d{2}\/\d{2})/i
+    );
+    if (m) return normaliserRAC(m[1]);
+
+    // Autres formats déjà supportés
+    m = texte.match(
+        /(\d+[.,]\d+)\s+[HLB]?\s*[HLB]?\s*<?\d+[.,]?\d*\s+mg\/mmol\s+cr[ée]atinine\s+Microalbumine\s*\(\s*ratio\s*\)/i
+    );
+    if (m && m[1]) return normaliserRAC(m[1]);
+
+    m = texte.match(
+        /Microalbumine\s*\(\s*ratio\s*\)[\s\S]{0,150}?(<\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)/i
+    );
+    if (m && m[1]) return normaliserRAC(m[1]);
+
+    return null;
 }
 
 function extraireTSAT(texte) {
@@ -523,13 +671,32 @@ function extraireTSAT(texte) {
 }
 
 function extraireLiStrict(texte) {
-    let m = texte.match(/Lithium\s*s[ée]rique[^\n]*?AUTO[VHBCAX]*\s*([\d,.]+)/i);
+    // Format Hôpital de l'Enfant-Jésus :
+    // "Lithium mmol/L AUTOV0,59 2026/06/15 17:44"
+    let m = texte.match(
+        /Lithium\s+mmol\/L\s+AUTO[VHBCAX\/]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+20\d{2}\//i
+    );
     if (m) return normaliserValeur(m[1]);
 
-    m = texte.match(/Lithium\s*s[ée]rique[^\d-]*([\d,.]+)(?:\s*mmol\/L)?/i);
+    // Format avec code labo entre l'unité et la valeur :
+    // "Lithium mmol/L CA1030,59 2026/06/15..."
+    m = texte.match(
+        /Lithium\s+mmol\/L\s+[A-Z]{2,}\d{2,}(?:AB|AH|AN|CB|CH|XB|XH)?\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+20\d{2}\//i
+    );
     if (m) return normaliserValeur(m[1]);
 
-    m = texte.match(/LITHIUM\s+(\d+[.,]\d+|\d+)\s/i);
+    // Format classique :
+    // "Lithium sérique 0,59 mmol/L"
+    m = texte.match(
+        /Lithium\s+s[ée]rique\s+(?:[HLBA]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s*mmol\/L/i
+    );
+    if (m) return normaliserValeur(m[1]);
+
+    // Format simple :
+    // "Lithium 0,59 mmol/L"
+    m = texte.match(
+        /\bLithium\s+(?:[HLBA]\s*)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s*mmol\/L/i
+    );
     if (m) return normaliserValeur(m[1]);
 
     return null;
@@ -578,11 +745,11 @@ function extraireAlbumine(texte) {
 }
 
 function extraireGGT(texte) {
-    return extractValue(texte, /GGT\s+U\/L\s+[A-Z]{2,}\d{4}(?:AB|AH|AN|CB|CH|XB|XH)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+20\d{2}\//i) ||
+    return extractValue(texte, /GAMMA\s+GT\s+([<>]?(?:=)?\d+(?:[.,]\d+)?)/i) ||
+        extractValue(texte, /GGT\s+U\/L\s+[A-Z]{2,}\d{4}(?:AB|AH|AN|CB|CH|XB|XH)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+20\d{2}\//i) ||
         extractValue(texte, /GGT\s+U\/L[^\n]*?AUTO[VHBCAX]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i) ||
         extraireFormatCisssInverse(texte, "GAMMA\\s+GT|GGT", "U\\/L") ||
-        extraireParUnite(texte, "(?:Glutamyltransf[ée]rase\\s*\\(GGT\\)|GGT)", "U\\/L", /GGT[^\d-]*([\d,.]+)/i, fb("GGT", "U\\/L")) ||
-        extractValue(texte, /GGT\s+(?:[HLBA]\s*)?(\d+[.,]\d+|\d+)\s*U\/L/i);
+        extraireParUnite(texte, "(?:Glutamyltransf[ée]rase\\s*\\(GGT\\)|GGT)", "U\\/L", /GGT[^\d-]*([\d,.]+)/i, fb("GGT", "U\\/L"));
 }
 
 function extrairePTH(texte) {
@@ -606,6 +773,14 @@ function extraireAcideUrique(texte) {
         if (match && match[1]) return normaliserValeur(match[1]);
     }
 
+    // Format AUTOV avec indicateur collé : "Urate umol/L AUTOVAH712 ..."
+    let mUrate = texte.match(/Urate\s+umol\/L\s+AUTO[VHBCAX\/]*(?:AB|AH|AN|CB|CH|XB|XH)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+20\d{2}\//i);
+    if (mUrate) return normaliserValeur(mUrate[1]);
+
+    // NOUVEAU : format "Urate umol/L CODEXXah<valeur> AAAA/" (ex: rapport IUCPQ)
+    mUrate = texte.match(/Urate\s+umol\/L\s+[A-Z]{2,}\d{2,}(?:AB|AH|AN|CB|CH|XB|XH)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+20\d{2}\//i);
+    if (mUrate) return normaliserValeur(mUrate[1]);
+
     return extraireParUnite(
         texte,
         "(?:Acide urique|Urate)",
@@ -616,6 +791,17 @@ function extraireAcideUrique(texte) {
 }
 
 function extraireVitB12(texte) {
+    // Format Hôpital de l'Enfant-Jésus :
+    // "Vitamine B12 H >1 475 pmol/L ( >135 )"
+    // → retourne ">1475"
+    let m = texte.match(
+        /Vitamine\s+B-?12\s+(?:[HLBA]\s+)?([<>]=?)\s*(\d[\d\s.,]*)\s*pmol\/L/i
+    );
+    if (m && m[1] && m[2]) {
+        const valeur = m[2].replace(/[\s\u00A0]/g, "").replace(",", ".");
+        return `${m[1]}${valeur}`;
+    }
+
     let matchInverse = texte.match(/>=?\s*[\d,.]+\s*Vitamine B12\s+pmol\/L\s+AUTO[VHBCAX]*\s*([\d,.]+)/i);
     if (matchInverse && matchInverse[1]) return normaliserValeur(matchInverse[1]);
 
@@ -739,6 +925,10 @@ function extraireUree(texte) {
     let compactCode4 = texte.match(/Ur[ée]e\s+mmol\/L\s+[A-Z]{2,}\d{4}(?:AB|AH|AN|CB|CH|XB|XH)?([<>]?(?:=)?\d{1,3}(?:[.,]\d+)?)\s+20\d{2}\//i);
     if (compactCode4) return normaliserValeur(compactCode4[1]);
 
+    // NOUVEAU : code labo à 2 chiffres seulement (ex: AH1)
+    let compactCourt = texte.match(/Ur[ée]e\s+mmol\/L\s+[A-Z]{2,}\d{2,}(?:AB|AH|AN|CB|CH|XB|XH)?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+20\d{2}\//i);
+    if (compactCourt) return normaliserValeur(compactCourt[1]);
+
     let compact = texte.match(/Ur[ée]e\s+mmol\/L\s+[A-Z]{2,}\d{3,}?([<>]?(?:=)?\d+(?:[.,]\d+)?)\s+20\d{2}\//i);
     if (compact) return normaliserValeur(compact[1]);
 
@@ -757,6 +947,9 @@ function extraireUree(texte) {
     return null;
 }
 
+/* CORRECTION : même correctif que extraireFormatRefCodeValeur — le code labo
+   fait exactement 4 chiffres, ce qui évite que la valeur DVE (14,6) devienne
+   414,6 en empruntant un chiffre du code (CAT0324). */
 function extraireDVE(texte) {
     return extraireFormatRefCodeValeur(texte, "DVE|Indice dist\\. érythrocytaire", "%") ||
         extraireFormatCisssInverse(texte, "DVE|Indice dist\\. érythrocytaire", "%") ||
@@ -853,10 +1046,25 @@ function extraireLipase(texte) {
         extractValue(texte, /Lipase\s+(?:[HLBA]\s*)?(\d+[.,]\d+|\d+)\s*U\/L/i);
 }
 
+function extraireCTX(texte) {
+    let m = texte.match(/C\s*Telopeptide\s+([<>]?(?:=)?\d+(?:[.,]\d+)?)\s*ng\/ml/i);
+    if (m) return normaliserValeur(m[1]);
+
+    m = texte.match(/C\s*Telopeptide[^\n]*?AUTO[VHBCAX]*\s*([<>]?(?:=)?\d+(?:[.,]\d+)?)/i);
+    if (m) return normaliserValeur(m[1]);
+
+    return extraireParUnite(texte, "C\\s*Telopeptide", "ng\\/ml", /C\s*Telopeptide[^\d-]*([\d,.]+)/i, fb("C\\s*Telopeptide", "ng\\/ml"));
+}
+
 function extraireNTproBNP(texte) {
     const valeurAvecMilliers = "([<>]?(?:=)?(?:\\d{1,3}(?:[\\s\\u00a0]\\d{3})+|\\d+)(?:[.,]\\d+)?)";
 
+    // NOUVEAU : code labo à 2 chiffres (ex: AH2375) - avant la variante 4 chiffres
+    let mCourt = texte.match(new RegExp("NT-?proBNP\\s+ng\\/L\\s+[A-Z]{2,}\\d{2,}(?:AB|AH|AN|CB|CH|XB|XH)?" + valeurAvecMilliers + "\\s+20\\d{2}\\/", "i"));
+    if (mCourt) return normaliserValeur(extractValue(mCourt[1], /^([<>]?(?:=)?\d+(?:[.,]\d+)?)$/) || mCourt[1]);
+
     return extractValue(texte, new RegExp("NT-?proBNP\\s+ng\\/L\\s+[A-Z]{2,}\\d{4}(?:AB|AH|AN|CB|CH|XB|XH)?" + valeurAvecMilliers + "\\s+20\\d{2}\\/", "i")) ||
+        extractValue(texte, new RegExp("NT-?proBNP\\s+ng\\/L\\s+[A-Z]{2,}\\d{2,}(?:AB|AH|AN|CB|CH|XB|XH)?" + valeurAvecMilliers + "\\s+20\\d{2}\\/", "i")) ||
         extractValue(texte, new RegExp("NT-?proBNP\\s+(?:[HLBA]\\s*)?" + valeurAvecMilliers + "\\s*ng\\/L", "i")) ||
         extractValue(texte, new RegExp("NT-?proBNP\\s+" + valeurAvecMilliers + "\\s+(?:AH|AB|AN|CB|CH|XB|XH)?\\s*ng\\/L", "i")) ||
         extraireParUnite(texte, "NT-?proBNP", "ng\\/L", new RegExp("NT-?proBNP[^\\d-]*" + valeurAvecMilliers + "\\s*ng\\/L", "i")) ||
@@ -1031,77 +1239,451 @@ function normaliserAntibiotique(nom) {
         "Fosfomycine": "Fosfomycine",
         "Ampicilline": "Ampicilline",
         "Amoxicilline+clavulanate": "Amoxicilline-clavulanate",
+        "Amoxicilline": "Amoxicilline",
         "Piperacilline+tazobactam": "Pipéracilline-tazobactam",
+        "Pip-tazo": "Pip-tazo",
         "Cefalexine": "Céfalexine",
+        "Cephalexine": "Céphalexine",
         "Cefuroxime": "Céfuroxime",
+        "Cefuroxime oral": "Céfuroxime",
+        "Céfuroxime oral": "Céfuroxime",
+        "Cefuroxime IV": "Céfuroxime",
         "Ceftriaxone": "Ceftriaxone",
         "Ceftazidime": "Ceftazidime",
         "Cefixime": "Cefixime",
+        "Cefepime": "Céfépime",
         "Ertapenem": "Ertapénem",
         "Imipenem": "Imipénem",
         "Meropenem": "Méropénem",
-        "Trimethoprime+sulfamethoxazole": "TMP-SMX (Trimethoprime+sulfamethoxazole)",
+        "Trimethoprime+sulfamethoxazole": "TMP-SMX",
+        "TMP-SMX": "TMP-SMX",
         "Gentamicine": "Gentamicine",
         "Tobramycine": "Tobramycine",
-        "Ciprofloxacine": "Ciprofloxacine"
+        "Ciprofloxacine": "Ciprofloxacine",
+        "Vancomycine": "Vancomycine",
+        "Vancomycine (IV)": "Vancomycine",
+        "Penicilline": "Pénicilline"
+    };
+
+    return map[nom] || nom;
+}
+
+function normaliserOrganisme(nom) {
+    const map = {
+        "Enterococcus faecalis": "E. faecalis",
+        "Escherichia coli": "E. coli",
+        "Klebsiella pneumoniae": "K. pneumoniae",
+        "Pseudomonas aeruginosa": "P. aeruginosa",
+        "Proteus mirabilis": "P. mirabilis",
+        "Staphylococcus aureus": "S. aureus",
+        "Staphylococcus saprophyticus": "S. saprophyticus",
+        "Enterobacter cloacae": "E. cloacae",
+        "Citrobacter freundii": "C. freundii",
+        "Klebsiella oxytoca": "K. oxytoca",
+        "Serratia marcescens": "S. marcescens",
+        "Morganella morganii": "M. morganii"
     };
 
     return map[nom] || nom;
 }
 
 function extraireDateCulture(texte) {
-    const m = texte.match(/Urine\s*;\s*Culture\s+FINAL\s+(\d{4}\/\d{2}\/\d{2})/i);
-    return m ? m[1] : null;
+    const m = texte.match(/Urine\s*;\s*Culture\s+FINAL\s+(\d{4}\/\d{2}\/\d{2})/i)
+        || texte.match(/URINE\s*\(culture\)\s*\*?\s*FINAL\s+(\d{2,4}\/\d{2}\/\d{2})/i);
+    if (!m) return null;
+    let d = m[1];
+    if (d.length === 8) d = `20${d}`;
+    return d;
+}
+
+/* Nettoie le libellé d'un organisme: retire la quantification (UFC/L, 10eN),
+   les commentaires et la ponctuation résiduelle. Retourne null si le texte ne
+   ressemble pas à un nom d'organisme. */
+function nettoyerNomOrganisme(brut) {
+    const nom = String(brut || "")
+        .split(/\s+(?:Sensible|Interm[ée]diaire|R[ée]sistant)\b/i)[0]
+        // quantification, avant ou après le nom: ">= 10e7 UFC/L", "entre 10e6 et 10e7 UFC/L"
+        .replace(/\b(?:entre|environ|et)\b/gi, " ")
+        .replace(/[<>=\u2265\u2264]+/g, " ")
+        .replace(/\b\d+(?:[.,]\d+)?\s*[x\u00d7]\s*10e\d\b/gi, " ")
+        .replace(/\b10e\d\b/gi, " ")
+        .replace(/\b(?:UFC|CFU)\s*\/\s*[mM]?[Ll]\b/gi, " ")
+        .replace(/\s+/g, " ")
+        .replace(/[\s.:;,\-]+$/, "")
+        .trim();
+
+    if (nom.length < 4) return null;
+    if (/\d/.test(nom)) return null;
+    if (!/^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’.()\-\s]*$/.test(nom)) return null;
+
+    return nom;
+}
+
+/* Associe un numéro d'organisme (01, 02, ...) à son nom. Gère les formats:
+     (01) Escherichia coli >= 10e7 UFC/L
+     Organisme 01: Escherichia coli
+     ORG: 01 - Escherichia coli
+     ORG# 01 Escherichia coli */
+function extraireOrganismesParNumero(texte) {
+    const organismes = {};
+
+    const motifs = [
+        /^\(\s*0?(\d{1,2})\s*\)\s*(.+)$/,
+        /^(?:Organisme|ORGANISME|ORG)\s*#?\s*[:\-]?\s*0?(\d{1,2})\s*[:\-.]?\s*(.+)$/i
+    ];
+
+    for (const ligne of texte.split(/\r?\n/)) {
+        const ligneTrim = ligne.trim();
+        if (!ligneTrim) continue;
+
+        for (const motif of motifs) {
+            const m = ligneTrim.match(motif);
+            if (!m) continue;
+
+            const nom = nettoyerNomOrganisme(m[2]);
+            if (!nom) break;
+
+            const key = m[1].padStart(2, "0");
+            if (!organismes[key]) organismes[key] = normaliserOrganisme(nom);
+            break;
+        }
+    }
+
+    return organismes;
+}
+
+/* Analyse une ligne d'antibiogramme: retourne le nom de l'antibiotique et les
+   statuts trouvés avec leur position (colonne) dans la ligne brute. Gère la
+   valeur de CMI facultative et le code de méthode en fin de ligne (ex. D1). */
+function analyserLigneAntibiogramme(ligneBrute) {
+    const ligne = ligneBrute.replace(/\s+$/, "");
+    if (!ligne.trim() || /^\s*CMI\b/i.test(ligne)) return null;
+
+    const m = ligne.match(/^(\s*\*{0,4}\s*)([A-Za-zÀ-ÿ0-9()+\-\/.,\s]+?)\*{0,3}((?:\s+(?:[<>=\u2265\u2264]{1,2}\s*)?\d+(?:[.,]\d+)?)?)((?:\s+(?:S|R|I|SDD|NS))+)(?:\s+D\d+)?\s*$/i);
+    if (!m) return null;
+
+    const nom = normaliserAntibiotique(m[2].trim().replace(/\*+$/, "").trim());
+    if (!nom) return null;
+
+    const debutStatuts = m[1].length + m[2].length + m[3].length;
+    const statuts = [...ligne.substring(debutStatuts).matchAll(/\b(S|R|I|SDD|NS)\b/gi)]
+        .map(s => ({ statut: s[1].toUpperCase(), pos: debutStatuts + s.index }));
+
+    if (statuts.length === 0) return null;
+
+    return { nom, statuts };
+}
+
+/* Gabarit des colonnes de statuts: positions de la ligne la plus complète du bloc. */
+function gabaritColonnes(lignes) {
+    let gabarit = [];
+    for (const ligne of lignes) {
+        if (ligne.statuts.length > gabarit.length) gabarit = ligne.statuts.map(s => s.pos);
+    }
+    return gabarit;
+}
+
+/* Vrai si les colonnes du gabarit sont réellement espacées (mise en page du
+   rapport conservée). Si le texte collé a perdu l'alignement, les statuts sont
+   collés les uns aux autres et l'information de colonne est inutilisable. */
+function colonnesAlignees(gabarit) {
+    if (gabarit.length <= 1) return true;
+    for (let i = 1; i < gabarit.length; i++) {
+        if (gabarit[i] - gabarit[i - 1] < 6) return false;
+    }
+    return true;
+}
+
+/* Affecte des positions à des colonnes de référence en conservant l'ordre
+   (affectation croissante minimisant l'écart total). Retourne un index de
+   colonne par position. */
+function affecterColonnes(positions, colonnes) {
+    if (positions.length === 0) return [];
+    if (colonnes.length === 0 || positions.length >= colonnes.length) return positions.map((p, i) => i);
+
+    const INF = Infinity;
+    const cout = [];
+    const choix = [];
+    for (let i = 0; i <= positions.length; i++) {
+        cout.push(new Array(colonnes.length + 1).fill(INF));
+        choix.push(new Array(colonnes.length + 1).fill(-1));
+    }
+    for (let j = 0; j <= colonnes.length; j++) cout[positions.length][j] = 0;
+
+    for (let i = positions.length - 1; i >= 0; i--) {
+        for (let j = colonnes.length - 1; j >= 0; j--) {
+            for (let k = j; k <= colonnes.length - (positions.length - i); k++) {
+                const suite = cout[i + 1][k + 1];
+                if (suite === INF) continue;
+                const total = Math.abs(positions[i] - colonnes[k]) + suite;
+                if (total < cout[i][j]) {
+                    cout[i][j] = total;
+                    choix[i][j] = k;
+                }
+            }
+        }
+    }
+
+    const affectation = [];
+    let j = 0;
+    for (let i = 0; i < positions.length; i++) {
+        const k = choix[i][j];
+        if (k < 0) return positions.map((p, idx) => idx);
+        affectation.push(k);
+        j = k + 1;
+    }
+    return affectation;
+}
+
+/* Associe chaque colonne du gabarit à un numéro d'organisme. Les statuts sont
+   décalés à droite des entêtes ORG#NN: on retient le décalage global qui aligne
+   le mieux le gabarit sur les entêtes. */
+function associerColonnesOrganismes(gabarit, entetes) {
+    if (entetes.length === 0) return gabarit.map((p, i) => String(i + 1).padStart(2, "0"));
+    if (gabarit.length >= entetes.length) return entetes.map(e => e.no);
+
+    const positionsEntetes = entetes.map(e => e.pos);
+    let meilleur = null;
+
+    for (const p of gabarit) {
+        for (const q of positionsEntetes) {
+            const positions = gabarit.map(x => x - (p - q));
+            const affectation = affecterColonnes(positions, positionsEntetes);
+            const cout = affectation.reduce((somme, idx, i) => somme + Math.abs(positions[i] - positionsEntetes[idx]), 0);
+            if (!meilleur || cout < meilleur.cout) meilleur = { cout, affectation };
+        }
+    }
+
+    return meilleur ? meilleur.affectation.map(idx => entetes[idx].no) : entetes.map(e => e.no);
+}
+
+/* Groupe taxonomique d'un organisme, utilisé pour savoir quels antibiotiques le
+   laboratoire rapporte pour lui. */
+function groupeOrganisme(nom) {
+    const n = String(nom || "").toLowerCase();
+
+    if (/enterococcus|e\.\s*faecalis|e\.\s*faecium/.test(n)) return "enterocoque";
+    if (/staphylococcus|s\.\s*aureus|s\.\s*saprophyticus|s\.\s*epidermidis/.test(n)) return "staphylocoque";
+    if (/streptococcus|s\.\s*agalactiae/.test(n)) return "streptocoque";
+    if (/pseudomonas|p\.\s*aeruginosa/.test(n)) return "pseudomonas";
+    if (/escherichia|e\.\s*coli/.test(n)) return "ecoli";
+    if (/klebsiella|k\.\s*pneumoniae|k\.\s*oxytoca/.test(n)) return "klebsiella";
+    if (/proteus|p\.\s*mirabilis/.test(n)) return "proteus";
+    if (/enterobacter|citrobacter|serratia|morganella|e\.\s*cloacae|c\.\s*freundii|s\.\s*marcescens|m\.\s*morganii/.test(n)) return "enterobacterie";
+
+    return null;
+}
+
+/* Groupes d'organismes pour lesquels le laboratoire rapporte chaque antibiotique.
+   Sert à rattacher les résultats à la bonne colonne quand le texte collé a perdu
+   l'alignement du tableau (ex. « TMP-SMX S S » n'est pas rapporté pour les
+   entérocoques: les deux résultats sont donc ceux des bacilles Gram négatif). */
+function groupesTestesPourAntibiotique(antibiotique) {
+    const entero = ["ecoli", "klebsiella", "proteus", "enterobacterie"];
+    const table = {
+        "Nitrofurantoïne": ["enterocoque", "staphylocoque", "ecoli", "klebsiella", "enterobacterie"],
+        "Fosfomycine": ["ecoli"],
+        "Pénicilline": ["enterocoque", "staphylocoque", "streptocoque"],
+        "Amoxicilline": ["enterocoque", "ecoli", "proteus", "streptocoque"],
+        "Amoxicilline-clavulanate": entero.concat(["staphylocoque"]),
+        "Ampicilline": entero.concat(["enterocoque"]),
+        "Vancomycine": ["enterocoque", "staphylocoque", "streptocoque"],
+        "TMP-SMX": entero.concat(["staphylocoque"]),
+        "Céphalexine": entero,
+        "Céfalexine": entero,
+        "Céfuroxime": entero,
+        "Cefixime": entero,
+        "Céfixime": entero,
+        "Ceftriaxone": entero,
+        "Ceftazidime": entero.concat(["pseudomonas"]),
+        "Céfépime": entero.concat(["pseudomonas"]),
+        "Pip-tazo": entero.concat(["pseudomonas"]),
+        "Pipéracilline-tazobactam": entero.concat(["pseudomonas"]),
+        "Ertapénem": entero,
+        "Imipénem": entero.concat(["pseudomonas"]),
+        "Méropénem": entero.concat(["pseudomonas"]),
+        "Méropénème": entero.concat(["pseudomonas"]),
+        "Gentamicine": entero.concat(["pseudomonas", "staphylocoque"]),
+        "Tobramycine": entero.concat(["pseudomonas"]),
+        "Ciprofloxacine": entero.concat(["pseudomonas"])
+    };
+
+    return table[antibiotique] || null;
+}
+
+/* Organismes (numéros de colonne) auxquels un antibiotique peut appartenir.
+   Retourne null si la table ne permet pas de conclure. */
+function organismesCandidats(antibiotique, entetes, organismes) {
+    const groupes = groupesTestesPourAntibiotique(antibiotique);
+    if (!groupes) return null;
+
+    const candidats = [];
+    for (const entete of entetes) {
+        const groupe = groupeOrganisme(organismes[entete.no]);
+        if (!groupe) return null;
+        if (groupes.includes(groupe)) candidats.push(entete.no);
+    }
+
+    return candidats;
+}
+
+/* Extrait, pour chaque colonne ORG#NN d'un tableau d'antibiogramme, la liste des
+   antibiotiques testés avec leur statut S/I/R. Les statuts sont attribués selon
+   leur position horizontale quand la mise en page est conservée, sinon selon le
+   panel d'antibiotiques rapporté pour chaque organisme. Un résultat qui reste
+   ambigu n'est attribué à aucun organisme. */
+function extraireTableauAntibiogramme(texte, organismes = {}) {
+    const resultatsParOrg = {};
+
+    const ajouter = (orgNo, statut, antibiotique) => {
+        const cible = statut === "S" ? "sensibles" : statut === "R" ? "resistants" : statut === "I" ? "intermediaires" : null;
+        if (!cible) return;
+        if (!resultatsParOrg[orgNo]) resultatsParOrg[orgNo] = { sensibles: [], resistants: [], intermediaires: [] };
+        if (!resultatsParOrg[orgNo][cible].includes(antibiotique)) resultatsParOrg[orgNo][cible].push(antibiotique);
+    };
+
+    const traiterBloc = (entetes, lignes) => {
+        if (lignes.length === 0) return;
+        const gabarit = gabaritColonnes(lignes);
+        const orgsParColonne = associerColonnesOrganismes(gabarit, entetes);
+        const colonnesFiables = entetes.length <= 1 || colonnesAlignees(gabarit);
+
+        for (const ligne of lignes) {
+            if (colonnesFiables) {
+                const affectation = affecterColonnes(ligne.statuts.map(s => s.pos), gabarit);
+                ligne.statuts.forEach((s, i) => {
+                    const idx = affectation[i];
+                    const orgNo = orgsParColonne[idx] || String(idx + 1).padStart(2, "0");
+                    ajouter(orgNo, s.statut, ligne.nom);
+                });
+                continue;
+            }
+
+            // Sans alignement exploitable, on se rabat sur le panel testé pour
+            // chaque organisme; si le compte ne correspond pas exactement, le
+            // résultat reste ambigu et n'est attribué à personne.
+            const candidats = organismesCandidats(ligne.nom, entetes, organismes);
+            if (!candidats || candidats.length !== ligne.statuts.length) continue;
+
+            ligne.statuts.forEach((s, i) => ajouter(candidats[i], s.statut, ligne.nom));
+        }
+    };
+
+    let entetes = [];
+    let lignesBloc = [];
+    let dansBloc = false;
+
+    // Fin d'un tableau: légende ou début d'une autre section du rapport
+    const rxFinBloc = /^\s*(?:S\s*=\s*Sensible|L[ée]gende des r[ée]sultats|-+\s*COMMENTAIRES|R[ée]vis[ée] par\s*:|ADRESSE DE LABORATOIRE)/i;
+
+    for (const ligneBrute of texte.split(/\r?\n/)) {
+        const entetesLigne = [...ligneBrute.matchAll(/ORG#\s*0?(\d{1,2})/gi)];
+        if (entetesLigne.length > 0) {
+            if (dansBloc) {
+                traiterBloc(entetes, lignesBloc);
+                lignesBloc = [];
+                dansBloc = false;
+            }
+            entetes = entetesLigne.map(x => ({ no: x[1].padStart(2, "0"), pos: x.index + x[0].length - x[1].length }));
+            // Format une colonne par organisme: "Organisme ORG# 01" ouvre directement
+            // le tableau de cet organisme (pas d'entête "Antibiotiques CMI").
+            if (/^\s*Organisme\s+ORG#/i.test(ligneBrute)) dansBloc = true;
+            continue;
+        }
+
+        if (/^\s*Antibiotiques?\s+CMI/i.test(ligneBrute)) {
+            if (dansBloc) {
+                traiterBloc(entetes, lignesBloc);
+                lignesBloc = [];
+            }
+            dansBloc = true;
+            continue;
+        }
+
+        if (!dansBloc) continue;
+
+        if (rxFinBloc.test(ligneBrute)) {
+            traiterBloc(entetes, lignesBloc);
+            lignesBloc = [];
+            dansBloc = false;
+            continue;
+        }
+
+        const ligne = analyserLigneAntibiogramme(ligneBrute);
+        if (ligne) lignesBloc.push(ligne);
+    }
+
+    if (dansBloc) traiterBloc(entetes, lignesBloc);
+
+    return resultatsParOrg;
 }
 
 function extraireCultureUrinaireComplete(texte) {
-    if (!/MICROBIOLOGIE/i.test(texte) || !/Urine\s*;\s*Culture/i.test(texte)) return null;
+    if (!/MICROBIOLOGIE|CULTURE MICROBIENNE/i.test(texte)) return null;
+    if (!/Urine\s*;\s*Culture|URINE\s*\(culture\)/i.test(texte)) return null;
 
     const dateCulture = extraireDateCulture(texte) || extraireDate(texte);
 
-    if (/Contamination probable/i.test(texte)) {
+    if (/Contamination probable/i.test(texte) && !/ORG#\s*0?\d/i.test(texte)) {
         return { type: "contamination", texte: "Culture urinaire: Contamination" };
     }
 
-    const zoneCultureMatch = texte.match(
-        /CULTURE MICROBIENNE[\s\S]*?Urine\s*;\s*Culture\s+FINAL[\s\S]*?(?=Organisme\s+ORG#|Révisé par:|ADRESSE DE LABORATOIRE|$)/i
-    );
-    const zoneCulture = zoneCultureMatch ? zoneCultureMatch[0] : texte;
+    const organismes = extraireOrganismesParNumero(texte);
+    const antibiogramme = extraireTableauAntibiogramme(texte, organismes);
 
-    const orgMatch = zoneCulture.match(/^\((\d+)\)\s+(?:>=?\s*\S+\s+ufc\/L\s+)?(.+)$/im);
-    const organisme = orgMatch ? orgMatch[2].trim() : null;
-    const orgNo = orgMatch ? orgMatch[1] : null;
-    if (!organisme) return null;
+    const numeros = Array.from(new Set([...Object.keys(organismes), ...Object.keys(antibiogramme)])).sort();
 
-    let section = texte;
-    if (orgNo) {
-        const rx = new RegExp(
-            "Organisme\\s+ORG#\\s*" + orgNo + "[\\s\\S]*?(?=L[ée]gende des r[ée]sultats:|-----COMMENTAIRES D'ANTIBIOTIQUE-----|R[ée]vis[ée] par:|ADRESSE DE LABORATOIRE|$)",
-            "i"
-        );
-        const m = texte.match(rx);
-        if (m) section = m[0];
+    if (numeros.length === 0) return null;
+
+    const lignesResume = [];
+
+    for (const no of numeros) {
+        const nomComplet = organismes[no];
+        const nomAffiche = nomComplet ? `${nomComplet}` : `Organisme ${no}`;
+        const res = antibiogramme[no] || { sensibles: [], resistants: [], intermediaires: [] };
+
+        const parties = [];
+        if (res.sensibles.length > 0) parties.push(`Sensible à ${res.sensibles.join(", ")}`);
+        if (res.intermediaires.length > 0) parties.push(`Intermédiaire à ${res.intermediaires.join(", ")}`);
+        if (res.resistants.length > 0) parties.push(`Résistant à ${res.resistants.join(", ")}`);
+
+        if (parties.length > 0) {
+            lignesResume.push(`${nomAffiche}: ${parties.join(". ")}`);
+        } else {
+            lignesResume.push(`${nomAffiche}`);
+        }
     }
 
-    const sensibles = [];
-    const resistants = [];
+    if (lignesResume.length === 0) return null;
 
-    for (const ligneBrute of section.split(/\r?\n/)) {
-        const ligne = ligneBrute.trim().replace(/^\*+\s*/, "");
-        const m = ligne.match(/^(.+?)\s+(S|R|I|SDD)(?:\s+D\d+)?$/i);
-        if (!m) continue;
+    const resume = lignesResume.join("\n");
 
-        const antibiotique = normaliserAntibiotique(m[1].trim());
-        const statut = m[2].toUpperCase();
-        if (statut === "S") sensibles.push(antibiotique);
-        if (statut === "R") resistants.push(antibiotique);
+    return { type: "culture", date: dateCulture, texte: resume };
+}
+
+/* Format microbiologie CISSS où l'étiquette et la date sont sur des lignes
+   distinctes:
+     Urine (sonde) - à demeure Prélevé le:
+     Reçu le:
+     Ensemencé le:
+     26/06/28 10:01
+   La première date qui suit l'étiquette est celle du prélèvement. */
+function extraireDatePrelevementMultiligne(texte) {
+    const lignes = texte.split(/\r?\n/);
+
+    for (let i = 0; i < lignes.length; i++) {
+        if (!/Pr[ée]lev[ée]e?\s*(?:le)?\s*:?\s*$/i.test(lignes[i].trim())) continue;
+
+        for (let k = i + 1; k < Math.min(lignes.length, i + 8); k++) {
+            let m = lignes[k].match(/\b(\d{4})[-\/](\d{2})[-\/](\d{2})\b/);
+            if (m) return `${m[1]}/${m[2]}/${m[3]}`;
+
+            m = lignes[k].match(/\b(\d{2})\/(\d{2})\/(\d{2})\b/);
+            if (m) return `20${m[1]}/${m[2]}/${m[3]}`;
+        }
     }
 
-    let resume = `${dateCulture}: ${organisme}`;
-    if (sensibles.length > 0) resume += `\nSensible à : ${sensibles.join(", ")}`;
-    if (resistants.length > 0) resume += `\nRésistance à : ${resistants.join(", ")}`;
-
-    return { type: "culture", date: dateCulture, organisme, sensibles, resistants, texte: resume };
+    return null;
 }
 
 function extraireDate(texte) {
@@ -1122,6 +1704,9 @@ function extraireDate(texte) {
 
     m = texte.match(/Prélevé le\s*(\d{4}[-/]\d{2}[-/]\d{2})/i);
     if (m) return m[1].replace(/-/g, "/");
+
+    const datePrelevement = extraireDatePrelevementMultiligne(texte);
+    if (datePrelevement) return datePrelevement;
 
     const matches = [...texte.matchAll(/(\d{4})[/-](\d{2})[/-](\d{2})/g)];
     let meilleure = null;
@@ -1181,16 +1766,13 @@ function processRapport(texte) {
 
     const valeurs = {
         GB: extraireGB(texte),
-        Hb: extraireFormatCisssInverse(texte, "Hb|H[ée]moglobine", "g\\/L") ||
-            extraireHb(texte) ||
-            extraireParUnite(texte, "Hb|Hémoglobine", "g\\/L", /(?:Hb|H[ée]moglobine)\s+(\d+)\s/i, fb("Hb|Hémoglobine", "g\\/L")) ||
-            extraireFormatCompactRef(texte, "Hb|Hémoglobine", "g\\/L") ||
-            extractValue(texte, /(?:Hb|H[ée]moglobine)\s+(\d+)\s/i),
-        VGM: extraireFormatCisssInverse(texte, "VGM|Volume glob\\. moyen", "fL") ||
-            extraireVGM(texte) ||
-            extraireParUnite(texte, "VGM|Volume glob\\. moyen", "fL", /Volume glob\. moyen\s+(\d+[.,]\d+|\d+)\s/i, fb("VGM|Volume glob\\. moyen", "fL")) ||
-            extraireFormatCompactRef(texte, "VGM|Volume glob\\. moyen", "fL") ||
-            extractValue(texte, /\bVGM\b\s+(?:[HLBA]\s*)?(\d+[.,]\d+|\d+)\s*fL/i),
+Hb: extraireHb(texte) ||
+    extraireValeurSurLigne(texte, "H[ée]moglobine|\\bHb\\b", "g\\/L") ||
+    extraireParUnite(texte, "Hb|Hémoglobine", "g\\/L", /(?:Hb|H[ée]moglobine)\s+(\d+)\s/i, fb("Hb|Hémoglobine", "g\\/L")) ||
+    extraireFormatCompactRef(texte, "Hb|Hémoglobine", "g\\/L") ||
+    extractValue(texte, /(?:Hb|H[ée]moglobine)\s+(\d+)\s/i),
+
+VGM: extraireVGM(texte),
         DVE: extraireDVE(texte),
         RNI: extraireRNI(texte),
         "Créat": extraireCreatinine(texte) ||
@@ -1222,6 +1804,7 @@ function processRapport(texte) {
         LDH: extraireLDH(texte),
         PAL: extrairePhosphataseAlcaline(texte),
         Lipase: extraireLipase(texte),
+      CTX: extraireCTX(texte),
         CRP: extraireCRP(texte),
         CT: extraireFormatCisssInverse(texte, "[0-9>]CHOLESTEROL", "mmol\\/L") ||
             extraireCT(texte) || extractValue(texte, /CHOLESTEROL\s+(\d+[.,]\d+|\d+)\s/i),
@@ -1230,6 +1813,7 @@ function processRapport(texte) {
         LDL: extraireLDL(texte),
         "non-HDL": extraireNonHDL(texte),
         ApoB: extraireFormatCisssInverse(texte, "APOLIPOPROTEINES?\\s+B", "g\\/L") || extraireApoB(texte),
+LpA: extraireLpA(texte),
         TSH: extraireFormatCisssInverse(texte, "TSH", "mU[I]?\\/L") ||
             extraireParUnite(texte, "(?:Thyréostimuline\\s*\\(TSH\\)|TSH)", "mUI\\/L", /TSH\s+(\d+[.,]\d+|\d+)\s/i, fb("(?:Thyréostimuline\\s*\\(TSH\\)|TSH)", "mUI\\/L")) ||
             extraireFormatCompactRef(texte, "(?:Thyréostimuline\\s*\\(TSH\\)|TSH)", "mUI\\/L"),
@@ -1238,12 +1822,20 @@ function processRapport(texte) {
         "Vit. B12": extraireVitB12(texte),
         "Vit. D": extraireVitD(texte),
         HbA1c: extraireA1c(texte),
+        Fructosamine: (() => {
+            const fruc = extraireFructosamine(texte);
+            if (!fruc) return null;
+            const a1cEstime = fructosamineVersHbA1c(fruc);
+            return a1cEstime ? `${fruc} (HbA1c ${a1cEstime})` : fruc;
+        })(),
         RAC: extraireRAC(texte),
         TSAT: extraireTSAT(texte),
         Ferritine: extraireFormatCisssInverse(texte, "FERRITINE", "ng\\/mL") ||
             extractValue(texte, /FERRITINE\s+(\d+)\s/i) || extraire(texte, /Ferritine[^\d-]*([\d,.]+)/i),
         TestT: extraireTestosterone(texte),
         DHEA: extraireDHEA(texte),
+        Estradiol: extraireEstradiol(texte),
+        SHBG: extraireSHBG(texte),
         BNP: extraireBNP(texte),
         NTproBNP: extraireNTproBNP(texte),
         PTH: extrairePTH(texte),
@@ -1285,9 +1877,9 @@ function formaterResultat(date, valeurs, heure, cultureComplete) {
         "Hb", "VGM", "DVE", "RNI", "Créat", "DFGe", "Urée", "Na", "K", "Cl", "Pi", "Mg",
         "Alb", "Pré-alb", "Ca", "Ca (corr.)", "Ca ion. pH", "Ca ionisé", "Ac. urique",
         "BiliT", "ALT", "AST", "CK", "GGT", "LDH", "PAL", "Lipase", "CRP",
-        "CT", "TG", "HDL", "LDL", "non-HDL", "ApoB",
-        "TSH", "T4L", "Prolactine", "TestT", "DHEA", "Vit. B12", "Vit. D", "HbA1c", "RAC",
-        "Ferritine", "TSAT", "BNP", "NTproBNP", "PTH", "PSA", "Li"
+        "CT", "TG", "HDL", "LDL", "non-HDL", "ApoB", "LpA",
+        "TSH", "T4L", "Prolactine", "TestT", "DHEA", "Estradiol", "SHBG", "Vit. B12", "Vit. D", "HbA1c", "Fructosamine", "RAC",
+        "Ferritine", "TSAT", "BNP", "NTproBNP", "PTH", "PSA", "CTX", "Li"
     ];
 
     const resultatsFormates = [];
